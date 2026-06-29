@@ -1,0 +1,12 @@
+# Ignore Gradle build
+.gradle/
+build/
+app/build/
+*.iml
+*.log
+.gradle/
+
+# IDE
+.idea/
+*.iml
+local.properties

@@ -1,0 +1,5 @@
+-keepattributes Signature
+-keepattributes *Annotation*
+-keep class com.wuling.keyless.** { *; }
+-dontwarn okhttp3.**
+-dontwarn okio.**
