@@ -160,7 +160,7 @@ class BleConnector(context: Context) : BleManager(context) {
     private fun buildAuthPayload(cmd: Int, keyBytes: ByteArray, randomBytes: ByteArray): ByteArray {
         val payload = mutableListOf<Byte>()
 
-        payload.addAll(keyIdBytes())
+        payload.addAll(keyIdBytes().toList())
         payload.add(cmd.toByte())
         payload.addAll(randomBytes.toList())
         payload.addAll(keyBytes.toList())
