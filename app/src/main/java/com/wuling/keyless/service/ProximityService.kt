@@ -167,6 +167,7 @@ class ProximityService(private val context: Context) {
 
     private suspend fun performUnlock(masterKey: String, masterRandom: String): Boolean {
         val device = targetDevice ?: return false
+        lastLockAction = System.currentTimeMillis() / 1000
         _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTING)
         try {
             connector.connectAndWait(device, Constants.CONNECTION_TIMEOUT_SEC * 1000L)
@@ -174,7 +175,6 @@ class ProximityService(private val context: Context) {
             delay(1000)
             if (connector.sendUnlock(masterKey, masterRandom)) {
                 _status.value = _status.value.copy(doorState = DoorState.UNLOCKED, lastError = null)
-                lastLockAction = System.currentTimeMillis() / 1000
                 retryCount = 0
                 log("开锁成功")
                 return true
@@ -203,6 +203,7 @@ class ProximityService(private val context: Context) {
 
     private suspend fun performLock(masterKey: String, masterRandom: String): Boolean {
         val device = targetDevice ?: return false
+        lastLockAction = System.currentTimeMillis() / 1000
         _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTING)
         try {
             connector.connectAndWait(device, Constants.CONNECTION_TIMEOUT_SEC * 1000L)
@@ -210,7 +211,6 @@ class ProximityService(private val context: Context) {
             delay(1000)
             if (connector.sendLock(masterKey, masterRandom)) {
                 _status.value = _status.value.copy(doorState = DoorState.LOCKED, lastError = null)
-                lastLockAction = System.currentTimeMillis() / 1000
                 retryCount = 0
                 log("落锁成功")
                 return true

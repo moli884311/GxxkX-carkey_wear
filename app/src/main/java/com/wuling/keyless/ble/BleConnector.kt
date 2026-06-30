@@ -9,6 +9,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import no.nordicsemi.android.ble.BleManager
 import no.nordicsemi.android.ble.data.Data
 import java.util.UUID
@@ -82,11 +83,44 @@ class BleConnector(context: Context) : BleManager(context) {
             val randomBytes = hexToBytes(masterRandomHex)
 
             val authPayload = buildAuthPayload(cmd, keyBytes, randomBytes)
-            val result = writeAndWait(writeChar, authPayload)
 
-            if (result == null) return false
+            enableNotifications() ?: return false
 
-            return validateResponse(result)
+            val response = withTimeoutOrNull(10_000L) {
+                suspendCancellableCoroutine<ByteArray?> { cont ->
+                    val notifyChar = getNotifyCharacteristic()
+                    if (notifyChar == null) {
+                        if (cont.isActive) cont.resume(null)
+                        return@suspendCancellableCoroutine
+                    }
+                    var resolved = false
+                    setNotificationCallback(notifyChar).with { _, data ->
+                        if (!resolved && cont.isActive) {
+                            resolved = true
+                            cont.resume(data.getValue())
+                        }
+                    }
+                    cont.invokeOnCancellation {
+                        if (!resolved) {
+                            try { removeNotificationCallback(notifyChar) } catch (_: Exception) {}
+                        }
+                    }
+                    writeCharacteristic(writeChar, authPayload).split()
+                        .done {
+                            // write complete, wait for notification
+                        }
+                        .fail { _, status ->
+                            if (!resolved && cont.isActive) {
+                                resolved = true
+                                cont.resume(null)
+                            }
+                        }
+                        .enqueue()
+                }
+            }
+
+            if (response == null) return false
+            return validateResponse(response)
         } catch (_: Exception) {
             return false
         }
@@ -117,19 +151,6 @@ class BleConnector(context: Context) : BleManager(context) {
         var xor: Byte = 0
         for (b in payload) xor = (xor.toInt() xor b.toInt()).toByte()
         return xor == checksum
-    }
-
-    private suspend fun writeAndWait(char: BluetoothGattCharacteristic, data: ByteArray): ByteArray? {
-        return suspendCancellableCoroutine { cont ->
-            writeCharacteristic(char, data).split()
-                .done {
-                    if (cont.isActive) cont.resume(ByteArray(0))
-                }
-                .fail { _, status ->
-                    if (cont.isActive) cont.resumeWithException(RuntimeException("BLE write failed: $status"))
-                }
-                .enqueue()
-        }
     }
 
     fun getWriteCharacteristic(): BluetoothGattCharacteristic? {
