@@ -186,8 +186,7 @@ class WulingApi(
         sendCommand(if (on) "acOn" else "acOff")
     }
 
-    private suspend fun sendCommand(cmd: String): CommandResult {
-        try {
+    private suspend fun sendCommand(cmd: String): CommandResult = try {
             val headers = generateSignature()
             val jsonBody = JSONObject().apply { put("command", cmd) }
             val request = Request.Builder()
@@ -209,7 +208,6 @@ class WulingApi(
         } catch (e: Exception) {
             CommandResult(false, error = "网络异常: ${e.message}")
         }
-    }
 
     data class SgmwHeaders(
         val token: String,
