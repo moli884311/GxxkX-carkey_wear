@@ -105,12 +105,28 @@ class BleConnector(context: Context) : BleManager(context) {
             val randomBytes = hexToBytes(masterRandomHex)
             val authPayload = buildAuthPayload(cmd, keyBytes, randomBytes)
 
+            _lastIndication = null
+            _indicationSource = null
+
             setIndicationCallback(notifyChar).with { _, data ->
-                _lastNotification = data.getValue()
+                _lastIndication = data.getValue()
+                _indicationSource = "NOTIFY"
+            }
+
+            setIndicationCallback(writeChar).with { _, data ->
+                _lastIndication = data.getValue()
+                _indicationSource = "WRITE"
             }
 
             suspendCancellableCoroutine<Unit> { cont ->
                 enableIndications(notifyChar)
+                    .done { if (cont.isActive) cont.resume(Unit) }
+                    .fail { _, _ -> if (cont.isActive) cont.resume(Unit) }
+                    .enqueue()
+            }
+
+            suspendCancellableCoroutine<Unit> { cont ->
+                enableIndications(writeChar)
                     .done { if (cont.isActive) cont.resume(Unit) }
                     .fail { _, _ -> if (cont.isActive) cont.resume(Unit) }
                     .enqueue()
@@ -133,17 +149,19 @@ class BleConnector(context: Context) : BleManager(context) {
             LogRepository.append("BLE", "写入成功, 等待应答...")
 
             val notifData = withTimeoutOrNull(3000L) {
-                while (_lastNotification == null) {
+                while (_lastIndication == null) {
                     kotlinx.coroutines.delay(100)
                 }
-                _lastNotification
+                _lastIndication
             }
 
-            _lastNotification = null
+            val source = _indicationSource
+            _lastIndication = null
+            _indicationSource = null
 
             if (notifData != null && notifData.isNotEmpty()) {
                 val valid = validateResponse(notifData)
-                LogRepository.append("BLE", "应答 valid=$valid len=${notifData.size} hex=${notifData.joinToString("") { "%02x".format(it) }}")
+                LogRepository.append("BLE", "应答 src=$source valid=$valid len=${notifData.size} hex=${notifData.joinToString("") { "%02x".format(it) }}")
                 return valid
             }
             LogRepository.append("BLE", "写入成功(无应答) cmd=0x${cmd.toString(16)}")
@@ -155,7 +173,10 @@ class BleConnector(context: Context) : BleManager(context) {
     }
 
     @Volatile
-    private var _lastNotification: ByteArray? = null
+    private var _lastIndication: ByteArray? = null
+
+    @Volatile
+    private var _indicationSource: String? = null
 
     private fun buildAuthPayload(cmd: Int, keyBytes: ByteArray, randomBytes: ByteArray): ByteArray {
         val payload = mutableListOf<Byte>()
