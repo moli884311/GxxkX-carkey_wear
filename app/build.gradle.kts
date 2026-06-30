@@ -55,7 +55,6 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     implementation("no.nordicsemi.android:ble:2.11.0")
-    implementation("no.nordicsemi.android:ble-ktx:2.11.0")
     implementation("com.google.accompanist:accompanist-permissions:0.36.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
