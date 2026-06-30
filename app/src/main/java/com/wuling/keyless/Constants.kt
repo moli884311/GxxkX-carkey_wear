@@ -16,8 +16,8 @@ object Constants {
     const val CMD_LOCK = 0x01
     const val CMD_UNLOCK = 0x02
 
-    const val RSSI_NEAR_THRESHOLD = -55
-    const val RSSI_FAR_THRESHOLD = -75
+    const val RSSI_NEAR_THRESHOLD = -75
+    const val RSSI_FAR_THRESHOLD = -85
 
     const val LOCK_DEBOUNCE_SEC = 10
     const val CONNECTION_TIMEOUT_SEC = 10

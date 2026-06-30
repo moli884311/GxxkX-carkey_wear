@@ -78,38 +78,41 @@ class BleConnector(context: Context) : BleManager(context) {
 
     private suspend fun sendAuthenticatedCommand(cmd: Int, masterKeyHex: String, masterRandomHex: String): Boolean {
         val writeChar = getWriteCharacteristic() ?: return false
+        val notifyChar = getNotifyCharacteristic() ?: return false
         try {
             val keyBytes = hexToBytes(masterKeyHex)
             val randomBytes = hexToBytes(masterRandomHex)
-
             val authPayload = buildAuthPayload(cmd, keyBytes, randomBytes)
-
-            enableNotifications() ?: return false
 
             val response = withTimeoutOrNull(10_000L) {
                 suspendCancellableCoroutine<ByteArray?> { cont ->
-                    val notifyChar = getNotifyCharacteristic()
-                    if (notifyChar == null) {
-                        if (cont.isActive) cont.resume(null)
-                        return@suspendCancellableCoroutine
-                    }
                     var resolved = false
+
                     setNotificationCallback(notifyChar).with { _, data ->
                         if (!resolved && cont.isActive) {
                             resolved = true
                             cont.resume(data.getValue())
                         }
                     }
+
                     cont.invokeOnCancellation {
                         if (!resolved) {
                             try { removeNotificationCallback(notifyChar) } catch (_: Exception) {}
                         }
                     }
-                    writeCharacteristic(writeChar, authPayload).split()
+
+                    enableNotifications(notifyChar)
                         .done {
-                            // write complete, wait for notification
+                            writeCharacteristic(writeChar, authPayload).split()
+                                .fail { _, _ ->
+                                    if (!resolved && cont.isActive) {
+                                        resolved = true
+                                        cont.resume(null)
+                                    }
+                                }
+                                .enqueue()
                         }
-                        .fail { _, status ->
+                        .fail { _, _ ->
                             if (!resolved && cont.isActive) {
                                 resolved = true
                                 cont.resume(null)
