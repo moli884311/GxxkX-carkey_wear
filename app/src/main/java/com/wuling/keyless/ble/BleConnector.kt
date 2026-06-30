@@ -20,13 +20,17 @@ class BleConnector(context: Context) : BleManager(context) {
 
     private var cachedGatt: BluetoothGatt? = null
 
+    @Volatile
+    var isConnected: Boolean = false
+        internal set
+
     suspend fun connectAndWait(device: BluetoothDevice, timeoutMs: Long = 10_000): Boolean =
         suspendCancellableCoroutine { cont ->
             var resolved = false
             connect(device)
                 .timeout(timeoutMs)
                 .done {
-                    if (!resolved) { resolved = true; cont.resume(true) }
+                    if (!resolved) { resolved = true; isConnected = true; cont.resume(true) }
                 }
                 .fail { _, status ->
                     if (!resolved) { resolved = true; cont.resumeWithException(RuntimeException("BLE连接失败: $status")) }
@@ -37,8 +41,20 @@ class BleConnector(context: Context) : BleManager(context) {
             }
         }
 
+    suspend fun ensureConnected(device: BluetoothDevice): Boolean {
+        if (isConnected) return true
+        return try {
+            connectAndWait(device)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     fun disconnectQuietly() {
-        try { disconnect().enqueue() } catch (_: Exception) {}
+        try {
+            disconnect().enqueue()
+            isConnected = false
+        } catch (_: Exception) {}
     }
 
     suspend fun enableNotifications(): BluetoothGattCharacteristic? =
@@ -180,5 +196,6 @@ class BleConnector(context: Context) : BleManager(context) {
 
     override fun onServicesInvalidated() {
         cachedGatt = null
+        isConnected = false
     }
 }

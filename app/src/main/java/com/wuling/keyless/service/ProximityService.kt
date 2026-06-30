@@ -41,7 +41,9 @@ class ProximityService(private val context: Context) {
     val logs = _logs.asSharedFlow()
 
     private var scanJob: Job? = null
+    private var disconnectTimer: Job? = null
     private var lastLockAction = 0L
+    private var lastDeviceSeen = 0L
     private var isRunning = false
     private var targetDevice: BluetoothDevice? = null
     private var retryCount = 0L
@@ -89,8 +91,11 @@ class ProximityService(private val context: Context) {
         _status.value = _status.value.copy(connectionState = ConnectionState.SCANNING)
 
         scanJob = scope.launch {
+            var lastScanTime = 0L
             try {
                 scanner.startScanning().collect { state ->
+                    lastScanTime = System.currentTimeMillis()
+                    lastDeviceSeen = lastScanTime
                     _status.value = _status.value.copy(
                         rssi = state.rssi,
                         label = state.label,
@@ -105,6 +110,19 @@ class ProximityService(private val context: Context) {
             } catch (e: Exception) {
                 log("扫描异常: ${e.message}")
                 _status.value = _status.value.copy(lastError = "扫描异常: ${e.message}")
+            }
+        }
+
+        disconnectTimer = scope.launch {
+            while (isActive) {
+                delay(5000)
+                if (connector.isConnected && lastDeviceSeen > 0 &&
+                    System.currentTimeMillis() - lastDeviceSeen > 30_000
+                ) {
+                    log("30秒未检测到设备，断开BLE连接")
+                    connector.disconnectQuietly()
+                    _status.value = _status.value.copy(connectionState = ConnectionState.SCANNING)
+                }
             }
         }
     }
@@ -143,14 +161,13 @@ class ProximityService(private val context: Context) {
         val mk = storage.getMasterKey() ?: return "未配置 masterKey"
         val mr = storage.getMasterRandom() ?: return "未配置 masterRandom"
         val device = targetDevice ?: return "未找到车辆设备"
-        _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTING)
         log("泊车中...")
         return try {
-            connector.connectAndWait(device, Constants.CONNECTION_TIMEOUT_SEC * 1000L)
+            val connected = connector.ensureConnected(device)
+            if (!connected) throw RuntimeException("BLE连接失败")
             _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTED)
             delay(500)
-            val success = connector.sendUnlock(mk, mr)
-            if (success) {
+            if (connector.sendUnlock(mk, mr)) {
                 _status.value = _status.value.copy(doorState = DoorState.UNLOCKED)
                 log("泊车模式：已开锁")
                 "泊车模式已开启"
@@ -159,9 +176,6 @@ class ProximityService(private val context: Context) {
             }
         } catch (e: Exception) {
             "连接失败: ${e.message}"
-        } finally {
-            connector.disconnectQuietly()
-            _status.value = _status.value.copy(connectionState = ConnectionState.DISCONNECTED)
         }
     }
 
@@ -170,34 +184,36 @@ class ProximityService(private val context: Context) {
         lastLockAction = System.currentTimeMillis() / 1000
         _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTING)
         try {
-            connector.connectAndWait(device, Constants.CONNECTION_TIMEOUT_SEC * 1000L)
+            val connected = connector.ensureConnected(device)
+            if (!connected) throw RuntimeException("BLE连接失败")
             _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTED)
             delay(1000)
             if (connector.sendUnlock(masterKey, masterRandom)) {
                 _status.value = _status.value.copy(doorState = DoorState.UNLOCKED, lastError = null)
                 retryCount = 0
                 log("开锁成功")
+                lastDeviceSeen = System.currentTimeMillis()
                 return true
-            } else {
-                log("开锁失败")
-                _status.value = _status.value.copy(lastError = "开锁失败")
-                return false
             }
+            log("开锁失败")
+            _status.value = _status.value.copy(lastError = "开锁失败")
+            return false
         } catch (e: Exception) {
             retryCount++
+            connector.isConnected = false
             val msg = "连接失败: ${e.message}"
             log(msg)
             if (retryCount >= Constants.MAX_RETRY_COUNT) {
-                _status.value = _status.value.copy(lastError = "$msg (已达最大重试次数)")
+                _status.value = _status.value.copy(
+                    lastError = "$msg (已达最大重试次数)",
+                    connectionState = ConnectionState.DISCONNECTED
+                )
                 return false
             }
             val waitMs = backoffDelay()
             log("等待 ${waitMs / 1000}s 后第 ${retryCount} 次重试...")
             delay(waitMs)
             return performUnlock(masterKey, masterRandom)
-        } finally {
-            connector.disconnectQuietly()
-            _status.value = _status.value.copy(connectionState = ConnectionState.DISCONNECTED)
         }
     }
 
@@ -206,34 +222,36 @@ class ProximityService(private val context: Context) {
         lastLockAction = System.currentTimeMillis() / 1000
         _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTING)
         try {
-            connector.connectAndWait(device, Constants.CONNECTION_TIMEOUT_SEC * 1000L)
+            val connected = connector.ensureConnected(device)
+            if (!connected) throw RuntimeException("BLE连接失败")
             _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTED)
             delay(1000)
             if (connector.sendLock(masterKey, masterRandom)) {
                 _status.value = _status.value.copy(doorState = DoorState.LOCKED, lastError = null)
                 retryCount = 0
                 log("落锁成功")
+                lastDeviceSeen = System.currentTimeMillis()
                 return true
-            } else {
-                log("落锁失败")
-                _status.value = _status.value.copy(lastError = "落锁失败")
-                return false
             }
+            log("落锁失败")
+            _status.value = _status.value.copy(lastError = "落锁失败")
+            return false
         } catch (e: Exception) {
             retryCount++
+            connector.isConnected = false
             val msg = "连接失败: ${e.message}"
             log(msg)
             if (retryCount >= Constants.MAX_RETRY_COUNT) {
-                _status.value = _status.value.copy(lastError = "$msg (已达最大重试次数)")
+                _status.value = _status.value.copy(
+                    lastError = "$msg (已达最大重试次数)",
+                    connectionState = ConnectionState.DISCONNECTED
+                )
                 return false
             }
             val waitMs = backoffDelay()
             log("等待 ${waitMs / 1000}s 后第 ${retryCount} 次重试...")
             delay(waitMs)
             return performLock(masterKey, masterRandom)
-        } finally {
-            connector.disconnectQuietly()
-            _status.value = _status.value.copy(connectionState = ConnectionState.DISCONNECTED)
         }
     }
 
@@ -241,8 +259,10 @@ class ProximityService(private val context: Context) {
         isRunning = false
         scanJob?.cancel()
         scanJob = null
+        disconnectTimer?.cancel()
+        disconnectTimer = null
         connector.disconnectQuietly()
-        connector.close()
+        try { connector.close() } catch (_: Exception) {}
         stopForegroundService()
         log("服务已停止")
     }
@@ -264,7 +284,6 @@ class ProximityService(private val context: Context) {
         try {
             context.stopService(Intent(context, BleForegroundService::class.java))
         } catch (e: Exception) {
-            // service already stopped
         }
     }
 }
