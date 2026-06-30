@@ -21,6 +21,59 @@ class WulingApi(
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    companion object {
+        private val loginClient = OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .build()
+
+        suspend fun loginWithPassword(phone: String, password: String): LoginResult = withContext(Dispatchers.IO) {
+            try {
+                val jsonBody = JSONObject().apply {
+                    put("phone", phone)
+                    put("password", password)
+                    put("type", "password")
+                }
+                val request = Request.Builder()
+                    .url("${Constants.API_BASE}/user/login")
+                    .addHeader("Content-Type", "application/json; charset=UTF-8")
+                    .addHeader("Accept", "application/json")
+                    .addHeader("User-Agent", "okhttp/4.9.0")
+                    .addHeader("channel", "linglingbang")
+                    .addHeader("platformNo", "Android")
+                    .addHeader("appVersionCode", Constants.APP_VERSION)
+                    .addHeader("deviceModel", "Android")
+                    .addHeader("deviceBrand", "Android")
+                    .addHeader("deviceType", "Android")
+                    .post(jsonBody.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+
+                val response = loginClient.newCall(request).execute()
+                val body = response.body?.string() ?: return@withContext LoginResult(false, error = "响应为空")
+
+                val json = JSONObject(body)
+                val code = json.optString("code", "")
+                if (code != "200") {
+                    return@withContext LoginResult(false, error = json.optString("msg", "登录失败"))
+                }
+
+                val data = json.optJSONObject("data") ?: return@withContext LoginResult(false, error = "数据为空")
+                val token = data.optString("sgmwaccesstoken", data.optString("accessToken", ""))
+                val cid = data.optString("sgmwclientid", data.optString("clientId", ""))
+                val csecret = data.optString("sgmwclientsecret", data.optString("clientSecret", ""))
+
+                LoginResult(
+                    success = true,
+                    accessToken = token,
+                    clientId = cid,
+                    clientSecret = csecret
+                )
+            } catch (e: Exception) {
+                LoginResult(false, error = "网络异常: ${e.message}")
+            }
+        }
+    }
+
     private fun generateSignature(): SgmwHeaders {
         val timestamp = (System.currentTimeMillis() / 1000).toString()
         val nonce = (100000..999999).random().toString()
@@ -78,6 +131,42 @@ class WulingApi(
             )
         } catch (e: Exception) {
             VehicleStatusResult(false, error = "网络异常: ${e.message}")
+        }
+    }
+
+    suspend fun queryBleKeyConfig(): BleKeyResult = withContext(Dispatchers.IO) {
+        try {
+            val headers = generateSignature()
+            val request = Request.Builder()
+                .url("${Constants.API_BASE}/carKey/queryDefaultCarKey")
+                .applySgmwHeaders(headers)
+                .get()
+                .build()
+
+            val response = client.newCall(request).execute()
+            val body = response.body?.string() ?: return@withContext BleKeyResult(false, error = "响应为空")
+
+            val json = JSONObject(body)
+            val code = json.optString("code", "")
+            if (code != "200") {
+                return@withContext BleKeyResult(false, error = json.optString("msg", "BLE 密钥查询失败"))
+            }
+
+            val data = json.optJSONObject("data") ?: return@withContext BleKeyResult(false, error = "数据为空")
+            BleKeyResult(
+                success = true,
+                address = data.optString("address", ""),
+                bleKey = data.optString("bleKey", ""),
+                masterKey = data.optString("masterKey", ""),
+                masterRandom = data.optString("masterRandom", ""),
+                vin = data.optString("vin", ""),
+                keyId = data.optString("keyId", ""),
+                serviceUuid = data.optString("serviceUuid", ""),
+                writeUuid = data.optString("writeUuid", ""),
+                notifyUuid = data.optString("notifyUuid", "")
+            )
+        } catch (e: Exception) {
+            BleKeyResult(false, error = "网络异常: ${e.message}")
         }
     }
 
@@ -164,6 +253,28 @@ class WulingApi(
     data class CommandResult(
         val success: Boolean,
         val message: String = "",
+        val error: String? = null
+    )
+
+    data class LoginResult(
+        val success: Boolean,
+        val accessToken: String = "",
+        val clientId: String = "",
+        val clientSecret: String = "",
+        val error: String? = null
+    )
+
+    data class BleKeyResult(
+        val success: Boolean,
+        val address: String = "",
+        val bleKey: String = "",
+        val masterKey: String = "",
+        val masterRandom: String = "",
+        val vin: String = "",
+        val keyId: String = "",
+        val serviceUuid: String = "",
+        val writeUuid: String = "",
+        val notifyUuid: String = "",
         val error: String? = null
     )
 }

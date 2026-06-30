@@ -1,81 +1,159 @@
 package com.wuling.keyless.ble
 
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGattCharacteristic
 import com.wuling.keyless.Constants
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import no.nordicsemi.android.ble.BleManager
+import no.nordicsemi.android.ble.data.Data
 import no.nordicsemi.android.ble.data.DataReceived
+import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 class BleConnector : BleManager() {
 
-    suspend fun sendLock(keyHex: String): Boolean = sendCommand(Constants.CMD_LOCK, keyHex)
-    suspend fun sendUnlock(keyHex: String): Boolean = sendCommand(Constants.CMD_UNLOCK, keyHex)
+    suspend fun connectAndWait(device: BluetoothDevice, timeoutMs: Long = 10_000): Boolean =
+        suspendCancellableCoroutine { cont ->
+            var resolved = false
+            connect(device)
+                .timeout(timeoutMs)
+                .done {
+                    if (!resolved) { resolved = true; cont.resume(true) }
+                }
+                .fail { _, status ->
+                    if (!resolved) { resolved = true; cont.resumeWithException(RuntimeException("BLE连接失败: $status")) }
+                }
+                .enqueue()
+            cont.invokeOnCancellation {
+                if (!resolved) disconnect()
+            }
+        }
 
-    private suspend fun sendCommand(cmd: Int, keyHex: String): Boolean {
-        val char = getCharacteristic() ?: return false
+    fun disconnectQuietly() {
+        try { disconnect().enqueue() } catch (_: Exception) {}
+    }
+
+    suspend fun enableNotifications(): BluetoothGattCharacteristic? =
+        suspendCancellableCoroutine { cont ->
+            val char = getNotifyCharacteristic()
+            if (char == null) {
+                cont.resume(null)
+                return@suspendCancellableCoroutine
+            }
+            enableNotifications(char)
+                .done { if (cont.isActive) cont.resume(char) }
+                .fail { _, status ->
+                    if (cont.isActive) cont.resumeWithException(RuntimeException("启用通知失败: $status"))
+                }
+                .enqueue()
+        }
+
+    fun observeNotifications(): Flow<ByteArray> = callbackFlow {
+        val char = getNotifyCharacteristic()
+        if (char == null) {
+            close()
+            return@callbackFlow
+        }
+        setNotificationCallback(char).with { _, data: DataReceived ->
+            trySend(data.value ?: ByteArray(0))
+        }
+        awaitClose {
+            try { removeNotificationCallback(char) } catch (_: Exception) {}
+        }
+    }
+
+    suspend fun sendLock(masterKeyHex: String, masterRandomHex: String): Boolean =
+        sendAuthenticatedCommand(Constants.CMD_LOCK, masterKeyHex, masterRandomHex)
+
+    suspend fun sendUnlock(masterKeyHex: String, masterRandomHex: String): Boolean =
+        sendAuthenticatedCommand(Constants.CMD_UNLOCK, masterKeyHex, masterRandomHex)
+
+    private suspend fun sendAuthenticatedCommand(cmd: Int, masterKeyHex: String, masterRandomHex: String): Boolean {
+        val writeChar = getWriteCharacteristic() ?: return false
         try {
-            val keyBytes = hexToBytes(keyHex)
-            val data = mutableListOf(cmd.toByte()).apply { addAll(keyBytes.toList()) }
-            appendChecksum(data)
+            val keyBytes = hexToBytes(masterKeyHex)
+            val randomBytes = hexToBytes(masterRandomHex)
 
-            val result = writeAndWait(char, data.toByteArray())
-            val response = readAndWait(char)
-            return response != null && validateChecksum(response)
+            val authPayload = buildAuthPayload(cmd, keyBytes, randomBytes)
+            val result = writeAndWait(writeChar, authPayload)
+
+            if (result == null) return false
+
+            return validateResponse(result)
         } catch (_: Exception) {
             return false
         }
     }
 
-    private fun getCharacteristic(): BluetoothGattCharacteristic? {
+    private fun buildAuthPayload(cmd: Int, keyBytes: ByteArray, randomBytes: ByteArray): ByteArray {
+        val payload = mutableListOf<Byte>()
+
+        payload.add(cmd.toByte())
+        payload.addAll(randomBytes.toList())
+        payload.addAll(keyBytes.toList())
+
+        appendXorChecksum(payload)
+
+        return payload.toByteArray()
+    }
+
+    private fun appendXorChecksum(bytes: MutableList<Byte>) {
+        var xor: Byte = 0
+        for (b in bytes) xor = (xor.toInt() xor b.toInt()).toByte()
+        bytes.add(xor)
+    }
+
+    private fun validateResponse(data: ByteArray): Boolean {
+        if (data.size < 2) return false
+        val payload = data.sliceArray(0 until data.size - 1)
+        val checksum = data.last()
+        var xor: Byte = 0
+        for (b in payload) xor = (xor.toInt() xor b.toInt()).toByte()
+        return xor == checksum
+    }
+
+    private suspend fun writeAndWait(char: BluetoothGattCharacteristic, data: ByteArray): ByteArray? {
+        return suspendCancellableCoroutine { cont ->
+            writeCharacteristic(char, data).split()
+                .write { _, _ -> }
+                .done {
+                    if (cont.isActive) cont.resume(ByteArray(0))
+                }
+                .fail { _, status ->
+                    if (cont.isActive) cont.resumeWithException(RuntimeException("BLE write failed: $status"))
+                }
+                .enqueue()
+        }
+    }
+
+    fun getWriteCharacteristic(): BluetoothGattCharacteristic? {
+        return findCharacteristic(Constants.BLE_WRITE_CHAR_UUID)
+    }
+
+    fun getNotifyCharacteristic(): BluetoothGattCharacteristic? {
+        return findCharacteristic(Constants.BLE_NOTIFY_CHAR_UUID)
+    }
+
+    private fun findCharacteristic(uuidStr: String): BluetoothGattCharacteristic? {
         val services = bluetoothGatt?.services ?: return null
+        val targetUuid = UUID.fromString(uuidStr)
         for (s in services) {
             if (s.uuid.toString().uppercase() == Constants.BLE_SERVICE_UUID.uppercase()) {
-                return s.getCharacteristic(java.util.UUID.fromString(Constants.BLE_CMD_CHAR_UUID))
+                return s.getCharacteristic(targetUuid)
             }
         }
         return null
     }
-
-    private suspend fun writeAndWait(char: BluetoothGattCharacteristic, data: ByteArray): ByteArray? =
-        suspendCancellableCoroutine { cont ->
-            writeCharacteristic(char, data).with { _, _ ->
-                if (cont.isActive) cont.resume(Unit)
-            }.enqueue()
-        }.let {
-            readAndWait(char)
-        }
-
-    private suspend fun readAndWait(char: BluetoothGattCharacteristic): ByteArray? =
-        suspendCancellableCoroutine { cont ->
-            readCharacteristic(char).with { _, data: DataReceived ->
-                if (cont.isActive) cont.resume(data.value)
-            }.fail { _, status ->
-                if (cont.isActive) cont.resumeWithException(RuntimeException("BLE read failed: $status"))
-            }.enqueue()
-        }
 
     private fun hexToBytes(hex: String): ByteArray {
         val clean = hex.replace(" ", "")
         return ByteArray(clean.length / 2) {
             clean.substring(it * 2, it * 2 + 2).toInt(16).toByte()
         }
-    }
-
-    private fun appendChecksum(bytes: MutableList<Byte>) {
-        var sum = 0
-        for (b in bytes) sum = (sum + (b.toInt() and 0xFF)) and 0xFF
-        bytes.add(sum.toByte())
-    }
-
-    private fun validateChecksum(data: ByteArray): Boolean {
-        if (data.size < 2) return false
-        val payload = data.sliceArray(0 until data.size - 1)
-        val checksum = data.last().toInt() and 0xFF
-        var sum = 0
-        for (b in payload) sum = (sum + (b.toInt() and 0xFF)) and 0xFF
-        return sum == checksum
     }
 
     override fun getGattCallback(): BleManagerGattCallback = object : BleManagerGattCallback() {

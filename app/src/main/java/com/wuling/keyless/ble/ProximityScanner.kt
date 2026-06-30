@@ -2,59 +2,83 @@ package com.wuling.keyless.ble
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import com.wuling.keyless.Constants
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.isActive
-import no.nordicsemi.android.ble.BleManager
 
 class ProximityScanner(private val context: Context, private val targetMac: String) {
 
     data class ProximityState(val rssi: Int, val label: String, val isNear: Boolean, val isFar: Boolean)
 
-    private var lastRssi: Int = -100
+    private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+    private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
 
-    fun isBluetoothReady(): Boolean = true
+    fun isBluetoothReady(): Boolean = bluetoothAdapter?.isEnabled == true
 
     @SuppressLint("MissingPermission")
     fun startScanning(): Flow<ProximityState> = callbackFlow {
-        while (isActive) {
-            if (hasBlePermission()) {
-                val device = BleManager.getBondedDevices()
-                    .firstOrNull { it.address.replace(":", "").uppercase() == targetMac }
-
-                if (device != null) {
-                    device.connectGatt(context, false, object : android.bluetooth.BluetoothGattCallback() {
-                        override fun onReadRemoteRssi(gatt: android.bluetooth.BluetoothGatt, rssi: Int, status: Int) {
-                            lastRssi = rssi
-                            val isNear = rssi >= Constants.RSSI_NEAR_THRESHOLD
-                            val isFar = rssi <= Constants.RSSI_FAR_THRESHOLD
-                            val label = when {
-                                rssi >= -50 -> "极近"
-                                rssi >= Constants.RSSI_NEAR_THRESHOLD -> "靠近"
-                                rssi <= Constants.RSSI_FAR_THRESHOLD -> "远离"
-                                else -> "中等距离"
-                            }
-                            trySend(ProximityState(rssi, label, isNear, isFar))
-                        }
-                    }, android.bluetooth.BluetoothDevice.TRANSPORT_LE).use { gatt ->
-                        delay(500)
-                        gatt.readRemoteRssi()
-                        delay(Constants.SCAN_INTERVAL_MS)
-                        gatt.close()
-                    }
-                }
-            }
-            delay(Constants.SCAN_INTERVAL_MS)
+        val adapter = bluetoothAdapter ?: run {
+            close(Exception("蓝牙不可用"))
+            return@callbackFlow
         }
-        awaitClose()
+        val scanner = adapter.bluetoothLeScanner ?: run {
+            close(Exception("BLE扫描器不可用"))
+            return@callbackFlow
+        }
+
+        val normalizedMac = targetMac.uppercase().replace(":", "").replace("-", "")
+
+        val filters = if (normalizedMac.length == 12) {
+            listOf(ScanFilter.Builder().setDeviceAddress(normalizedMac).build())
+        } else {
+            listOf(ScanFilter.Builder()
+                .setServiceUuid(ParcelUuid.fromString(Constants.BLE_SERVICE_UUID))
+                .build())
+        }
+
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .setReportDelay(0)
+            .build()
+
+        val scanCallback = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult) {
+                val rssi = result.rssi
+                val isNear = rssi >= Constants.RSSI_NEAR_THRESHOLD
+                val isFar = rssi <= Constants.RSSI_FAR_THRESHOLD
+                val label = when {
+                    rssi >= -50 -> "极近"
+                    rssi >= Constants.RSSI_NEAR_THRESHOLD -> "靠近"
+                    rssi <= Constants.RSSI_FAR_THRESHOLD -> "远离"
+                    else -> "中等距离"
+                }
+                trySend(ProximityState(rssi, label, isNear, isFar))
+            }
+
+            override fun onScanFailed(errorCode: Int) {
+                // silently retry on next cycle
+            }
+        }
+
+        scanner.startScan(filters, settings, scanCallback)
+
+        awaitClose {
+            try { scanner.stopScan(scanCallback) } catch (_: Exception) {}
+        }
     }
 
     fun hasBlePermission(): Boolean {
@@ -64,5 +88,11 @@ class ProximityScanner(private val context: Context, private val targetMac: Stri
         } else {
             ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         }
+    }
+
+    fun getDevice(): BluetoothDevice? {
+        val normalizedMac = targetMac.uppercase().replace(":", "").replace("-", "")
+        if (normalizedMac.length != 12) return null
+        return bluetoothAdapter?.getRemoteDevice(normalizedMac)
     }
 }
