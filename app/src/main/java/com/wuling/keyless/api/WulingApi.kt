@@ -51,11 +51,17 @@ class WulingApi(
                 val response = loginClient.newCall(request).execute()
                 val body = response.body?.string() ?: return@withContext LoginResult(false, error = "响应为空")
 
-                val json = JSONObject(body)
+                if (!response.isSuccessful) {
+                    return@withContext LoginResult(false, error = "HTTP ${response.code}: ${body.take(200)}")
+                }
+
+                val json = try { JSONObject(body) } catch (_: Exception) {
+                    return@withContext LoginResult(false, error = "解析失败: ${body.take(200)}")
+                }
                 val code = json.optString("code", "")
                 if (code != "200") {
-                    val msg = json.optString("msg", "").ifEmpty { "未知错误" }
-                    return@withContext LoginResult(false, error = "[$code] $msg")
+                    val msg = json.optString("msg", "").ifEmpty { "无错误信息" }
+                    return@withContext LoginResult(false, error = "code=$code msg=$msg")
                 }
 
                 val data = json.optJSONObject("data") ?: return@withContext LoginResult(false, error = "数据为空")
