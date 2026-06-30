@@ -91,25 +91,31 @@ class BleConnector(context: Context) : BleManager(context) {
         }
     }
 
-    suspend fun sendLock(masterKeyHex: String, masterRandomHex: String): Boolean =
-        sendAuthenticatedCommand(Constants.CMD_LOCK, masterKeyHex, masterRandomHex)
+    suspend fun sendLock(bleKeyHex: String, masterKeyHex: String, masterRandomHex: String): Boolean =
+        sendAuthenticatedCommand(Constants.CMD_LOCK, bleKeyHex, masterKeyHex, masterRandomHex)
 
-    suspend fun sendUnlock(masterKeyHex: String, masterRandomHex: String): Boolean =
-        sendAuthenticatedCommand(Constants.CMD_UNLOCK, masterKeyHex, masterRandomHex)
+    suspend fun sendUnlock(bleKeyHex: String, masterKeyHex: String, masterRandomHex: String): Boolean =
+        sendAuthenticatedCommand(Constants.CMD_UNLOCK, bleKeyHex, masterKeyHex, masterRandomHex)
 
-    private suspend fun sendAuthenticatedCommand(cmd: Int, masterKeyHex: String, masterRandomHex: String): Boolean {
+    private suspend fun sendAuthenticatedCommand(cmd: Int, bleKeyHex: String, masterKeyHex: String, masterRandomHex: String): Boolean {
         val writeChar = getWriteCharacteristic() ?: return false
         val notifyChar = getNotifyCharacteristic() ?: return false
         try {
-            val keyBytes = hexToBytes(masterKeyHex)
+            val bleKeyBytes = hexToBytes(bleKeyHex)
+            val masterKeyBytes = hexToBytes(masterKeyHex)
             val randomBytes = hexToBytes(masterRandomHex)
-            val authPayload = buildAuthPayload(cmd, keyBytes, randomBytes)
+            val authPayload = buildAuthPayload(cmd, bleKeyBytes, masterKeyBytes, randomBytes)
 
             setNotificationCallback(notifyChar).with { _, data ->
                 _lastNotification = data.getValue()
             }
 
-            enableNotifications(notifyChar).enqueue()
+            suspendCancellableCoroutine<Unit> { cont ->
+                enableNotifications(notifyChar)
+                    .done { if (cont.isActive) cont.resume(Unit) }
+                    .fail { _, _ -> if (cont.isActive) cont.resume(Unit) }
+                    .enqueue()
+            }
 
             val writeResult = suspendCancellableCoroutine<Boolean> { cont ->
                 writeCharacteristic(writeChar, authPayload).split()
@@ -147,12 +153,13 @@ class BleConnector(context: Context) : BleManager(context) {
     @Volatile
     private var _lastNotification: ByteArray? = null
 
-    private fun buildAuthPayload(cmd: Int, keyBytes: ByteArray, randomBytes: ByteArray): ByteArray {
+    private fun buildAuthPayload(cmd: Int, bleKeyBytes: ByteArray, masterKeyBytes: ByteArray, randomBytes: ByteArray): ByteArray {
         val payload = mutableListOf<Byte>()
 
         payload.add(cmd.toByte())
+        payload.addAll(bleKeyBytes.toList())
+        payload.addAll(masterKeyBytes.toList())
         payload.addAll(randomBytes.toList())
-        payload.addAll(keyBytes.toList())
 
         appendXorChecksum(payload)
 

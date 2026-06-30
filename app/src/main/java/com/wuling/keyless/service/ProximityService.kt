@@ -51,6 +51,7 @@ class ProximityService(private val context: Context) {
     private var retryCount = 0L
     private var cachedMasterKey: String? = null
     private var cachedMasterRandom: String? = null
+    private var cachedBleKey: String? = null
 
     private suspend fun log(msg: String) {
         LogRepository.append("ProxSvc", msg)
@@ -69,9 +70,11 @@ class ProximityService(private val context: Context) {
         val mac = storage.getMac() ?: run { isRunning = false; return log("未配置 BLE MAC") }
         val masterKey = storage.getMasterKey() ?: run { isRunning = false; return log("未配置 masterKey") }
         val masterRandom = storage.getMasterRandom() ?: run { isRunning = false; return log("未配置 masterRandom") }
+        val bleKey = storage.getKey() ?: masterKey
 
         cachedMasterKey = masterKey
         cachedMasterRandom = masterRandom
+        cachedBleKey = bleKey
 
         val scanner = ProximityScanner(context, mac)
 
@@ -214,7 +217,7 @@ class ProximityService(private val context: Context) {
             if (!connected) throw RuntimeException("BLE连接失败")
             _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTED)
             delay(500)
-            if (connector.sendUnlock(mk, mr)) {
+            if (connector.sendUnlock(cachedBleKey ?: mk, mk, mr)) {
                 _status.value = _status.value.copy(doorState = DoorState.UNLOCKED)
                 log("泊车模式：已开锁")
                 "泊车模式已开启"
@@ -235,7 +238,7 @@ class ProximityService(private val context: Context) {
             if (!connected) throw RuntimeException("BLE连接失败")
             _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTED)
             delay(1500)
-            if (connector.sendUnlock(masterKey, masterRandom)) {
+            if (connector.sendUnlock(cachedBleKey ?: masterKey, masterKey, masterRandom)) {
                 _status.value = _status.value.copy(doorState = DoorState.UNLOCKED, lastError = null)
                 retryCount = 0
                 log("开锁成功")
@@ -274,7 +277,7 @@ class ProximityService(private val context: Context) {
             if (!connected) throw RuntimeException("BLE连接失败")
             _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTED)
             delay(1500)
-            if (connector.sendLock(masterKey, masterRandom)) {
+            if (connector.sendLock(cachedBleKey ?: masterKey, masterKey, masterRandom)) {
                 _status.value = _status.value.copy(doorState = DoorState.LOCKED, lastError = null)
                 retryCount = 0
                 log("落锁成功")
