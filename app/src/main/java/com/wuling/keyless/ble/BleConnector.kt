@@ -132,9 +132,10 @@ class BleConnector(context: Context) : BleManager(context) {
                     .enqueue()
             }
 
-            LogRepository.append("BLE", "写入 cmd=0x${cmd.toString(16)} len=${authPayload.size} hex=${authPayload.joinToString("") { "%02x".format(it) }}")
+            LogRepository.append("BLE", "写入 cmd=0x${cmd.toString(16)} len=${authPayload.size} type=NO_RESPONSE hex=${authPayload.joinToString("") { "%02x".format(it) }}")
             val writeResult = suspendCancellableCoroutine<Boolean> { cont ->
-                writeCharacteristic(writeChar, authPayload).split()
+                writeChar.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                writeCharacteristic(writeChar, authPayload)
                     .done { if (cont.isActive) cont.resume(true) }
                     .fail { _, status ->
                         if (cont.isActive) cont.resume(false)
@@ -146,7 +147,7 @@ class BleConnector(context: Context) : BleManager(context) {
             if (!writeResult) {
                 return false
             }
-            LogRepository.append("BLE", "写入成功, 等待应答...")
+            LogRepository.append("BLE", "写入完成(NO_RESPONSE), 等待应答...")
 
             val notifData = withTimeoutOrNull(3000L) {
                 while (_lastIndication == null) {
