@@ -102,6 +102,7 @@ class BleConnector(context: Context) : BleManager(context) {
         try {
             val keyBytes = hexToBytes(masterKeyHex)
             val randomBytes = hexToBytes(masterRandomHex)
+            LogRepository.append("BLE", "rawKeyLen=${masterKeyHex.length} rawRandLen=${masterRandomHex.length}")
             val authPayload = buildAuthPayload(cmd, keyBytes, randomBytes)
 
             setupIndicationsAndWait()

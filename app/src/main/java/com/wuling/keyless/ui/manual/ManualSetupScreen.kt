@@ -247,7 +247,7 @@ fun ManualSetupScreen(
             Spacer(Modifier.height(32.dp))
             Button(
                 onClick = { viewModel.saveBleManual(mac, masterKey, vin.ifEmpty { null }, masterRandom) },
-                enabled = mac.length >= 12 && masterKey.length >= 16 && masterRandom.length >= 16,
+                enabled = mac.length >= 12 && masterKey.length >= 32 && masterRandom.length >= 32,
                 modifier = Modifier.fillMaxWidth().height(48.dp)
             ) {
                 Text("保存配置", fontSize = 15.sp)
