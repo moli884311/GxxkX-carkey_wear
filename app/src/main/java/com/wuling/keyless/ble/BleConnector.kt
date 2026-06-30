@@ -103,66 +103,30 @@ class BleConnector(context: Context) : BleManager(context) {
         try {
             val keyBytes = hexToBytes(masterKeyHex)
             val randomBytes = hexToBytes(masterRandomHex)
+
+            setupIndications(notifyChar, writeChar)
+
+            val kid = keyIdBytes()
+            LogRepository.append("BLE", "阶段1: 发送keyId hex=${kid.joinToString("") { "%02x".format(it) }}")
+            val phase1Ok = writeAndWait(writeChar, kid)
+            if (!phase1Ok) return false
+
+            val challenge = waitForIndication(3000L)
+            if (challenge != null) {
+                LogRepository.append("BLE", "收到challenge len=${challenge.size} hex=${challenge.joinToString("") { "%02x".format(it) }}")
+            } else {
+                LogRepository.append("BLE", "阶段1无应答, 继续发送命令...")
+            }
+
             val authPayload = buildAuthPayload(cmd, keyBytes, randomBytes)
+            LogRepository.append("BLE", "阶段2: 写入 cmd=0x${cmd.toString(16)} len=${authPayload.size} hex=${authPayload.joinToString("") { "%02x".format(it) }}")
+            val phase2Ok = writeAndWait(writeChar, authPayload)
+            if (!phase2Ok) return false
 
-            _lastIndication = null
-            _indicationSource = null
-
-            setIndicationCallback(notifyChar).with { _, data ->
-                _lastIndication = data.getValue()
-                _indicationSource = "NOTIFY"
-            }
-
-            setIndicationCallback(writeChar).with { _, data ->
-                _lastIndication = data.getValue()
-                _indicationSource = "WRITE"
-            }
-
-            suspendCancellableCoroutine<Unit> { cont ->
-                enableIndications(notifyChar)
-                    .done { if (cont.isActive) cont.resume(Unit) }
-                    .fail { _, _ -> if (cont.isActive) cont.resume(Unit) }
-                    .enqueue()
-            }
-
-            suspendCancellableCoroutine<Unit> { cont ->
-                enableIndications(writeChar)
-                    .done { if (cont.isActive) cont.resume(Unit) }
-                    .fail { _, _ -> if (cont.isActive) cont.resume(Unit) }
-                    .enqueue()
-            }
-
-            LogRepository.append("BLE", "写入 cmd=0x${cmd.toString(16)} len=${authPayload.size} type=NO_RESPONSE hex=${authPayload.joinToString("") { "%02x".format(it) }}")
-            val writeResult = suspendCancellableCoroutine<Boolean> { cont ->
-                writeChar.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-                writeCharacteristic(writeChar, authPayload)
-                    .done { if (cont.isActive) cont.resume(true) }
-                    .fail { _, status ->
-                        if (cont.isActive) cont.resume(false)
-                        LogRepository.append("BLE", "写入失败 cmd=0x${cmd.toString(16)} status=$status")
-                    }
-                    .enqueue()
-            }
-
-            if (!writeResult) {
-                return false
-            }
-            LogRepository.append("BLE", "写入完成(NO_RESPONSE), 等待应答...")
-
-            val notifData = withTimeoutOrNull(3000L) {
-                while (_lastIndication == null) {
-                    kotlinx.coroutines.delay(100)
-                }
-                _lastIndication
-            }
-
-            val source = _indicationSource
-            _lastIndication = null
-            _indicationSource = null
-
-            if (notifData != null && notifData.isNotEmpty()) {
-                val valid = validateResponse(notifData)
-                LogRepository.append("BLE", "应答 src=$source valid=$valid len=${notifData.size} hex=${notifData.joinToString("") { "%02x".format(it) }}")
+            val response = waitForIndication(3000L)
+            if (response != null && response.isNotEmpty()) {
+                val valid = validateResponse(response)
+                LogRepository.append("BLE", "应答 src=$_indicationSource valid=$valid len=${response.size} hex=${response.joinToString("") { "%02x".format(it) }}")
                 return valid
             }
             LogRepository.append("BLE", "写入成功(无应答) cmd=0x${cmd.toString(16)}")
@@ -173,11 +137,43 @@ class BleConnector(context: Context) : BleManager(context) {
         }
     }
 
-    @Volatile
-    private var _lastIndication: ByteArray? = null
+    private fun setupIndications(notifyChar: BluetoothGattCharacteristic, writeChar: BluetoothGattCharacteristic) {
+        _lastIndication = null
+        _indicationSource = null
 
-    @Volatile
-    private var _indicationSource: String? = null
+        setIndicationCallback(notifyChar).with { _, data ->
+            _lastIndication = data.getValue()
+            _indicationSource = "NOTIFY"
+        }
+        setIndicationCallback(writeChar).with { _, data ->
+            _lastIndication = data.getValue()
+            _indicationSource = "WRITE"
+        }
+        enableIndications(notifyChar).enqueue()
+        enableIndications(writeChar).enqueue()
+    }
+
+    private suspend fun writeAndWait(writeChar: BluetoothGattCharacteristic, data: ByteArray): Boolean {
+        return suspendCancellableCoroutine<Boolean> { cont ->
+            writeChar.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+            writeCharacteristic(writeChar, data)
+                .done { if (cont.isActive) cont.resume(true) }
+                .fail { _, status ->
+                    if (cont.isActive) cont.resume(false)
+                    LogRepository.append("BLE", "写入失败 status=$status")
+                }
+                .enqueue()
+        }
+    }
+
+    private suspend fun waitForIndication(timeoutMs: Long): ByteArray? {
+        return withTimeoutOrNull(timeoutMs) {
+            while (_lastIndication == null) {
+                kotlinx.coroutines.delay(100)
+            }
+            _lastIndication.also { _lastIndication = null }
+        }
+    }
 
     private fun buildAuthPayload(cmd: Int, keyBytes: ByteArray, randomBytes: ByteArray): ByteArray {
         val payload = mutableListOf<Byte>()
