@@ -16,8 +16,8 @@ import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import com.wuling.keyless.Constants
 import com.wuling.keyless.service.LogRepository
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 
@@ -54,16 +54,24 @@ class ProximityScanner(private val context: Context, private val targetMac: Stri
         }
 
         val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+            .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
+            .setLegacy(false)
             .setReportDelay(0)
             .build()
 
+        var resultCount = 0
+
         val scanCallback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
+                resultCount++
                 val deviceMac = result.device.address.uppercase().replace(":", "")
 
-                if (normalizedTargetMac.length == 12 && deviceMac != normalizedTargetMac) return
+                if (normalizedTargetMac.length == 12 && deviceMac != normalizedTargetMac) {
+                    if (resultCount == 1) {
+                        LogRepository.append("Scan", "扫描活跃, 首个设备 ${result.device.address} RSSI=${result.rssi}")
+                    }
+                    return
+                }
 
                 val rssi = result.rssi
                 val isNear = rssi >= Constants.RSSI_NEAR_THRESHOLD
@@ -74,7 +82,7 @@ class ProximityScanner(private val context: Context, private val targetMac: Stri
                     rssi <= Constants.RSSI_FAR_THRESHOLD -> "远离"
                     else -> "中等距离"
                 }
-                trySend(ProximityState(rssi, label, isNear, isFar))
+                channel.trySend(ProximityState(rssi, label, isNear, isFar))
             }
 
             override fun onScanFailed(errorCode: Int) {
@@ -86,15 +94,13 @@ class ProximityScanner(private val context: Context, private val targetMac: Stri
             }
         }
 
-        android.util.Log.d("ProximityScanner", "开始扫描, targetMac=$targetMac, normalizedMac=$normalizedTargetMac, filters=null")
-
-        LogRepository.append("Scan", "开始扫描 mac=$normalizedTargetMac")
+        LogRepository.append("Scan", "开始扫描 mac=$normalizedTargetMac mode=BALANCED")
 
         scanner.startScan(filters, settings, scanCallback)
 
         awaitClose {
             try { scanner.stopScan(scanCallback) } catch (_: Exception) {}
-            LogRepository.append("Scan", "扫描已停止")
+            LogRepository.append("Scan", "扫描已停止 (收到${resultCount}个结果)")
         }
     }
 

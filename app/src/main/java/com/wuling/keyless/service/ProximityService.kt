@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.conflate
 
 enum class DoorState { LOCKED, UNLOCKED, UNKNOWN }
 
@@ -43,11 +42,15 @@ class ProximityService(private val context: Context) {
 
     private var scanJob: Job? = null
     private var disconnectTimer: Job? = null
+    private var probeTimer: Job? = null
     private var lastLockAction = 0L
     private var lastDeviceSeen = 0L
+    private var lastScanResult = 0L
     private var isRunning = false
     private var targetDevice: BluetoothDevice? = null
     private var retryCount = 0L
+    private var cachedMasterKey: String? = null
+    private var cachedMasterRandom: String? = null
 
     private suspend fun log(msg: String) {
         LogRepository.append("ProxSvc", msg)
@@ -60,24 +63,29 @@ class ProximityService(private val context: Context) {
     }
 
     suspend fun start() {
-        if (isRunning) stop()
+        if (isRunning) return
         isRunning = true
 
-        val mac = storage.getMac() ?: return log("未配置 BLE MAC")
-        val masterKey = storage.getMasterKey() ?: return log("未配置 masterKey")
-        val masterRandom = storage.getMasterRandom() ?: return log("未配置 masterRandom")
+        val mac = storage.getMac() ?: run { isRunning = false; return log("未配置 BLE MAC") }
+        val masterKey = storage.getMasterKey() ?: run { isRunning = false; return log("未配置 masterKey") }
+        val masterRandom = storage.getMasterRandom() ?: run { isRunning = false; return log("未配置 masterRandom") }
+
+        cachedMasterKey = masterKey
+        cachedMasterRandom = masterRandom
 
         val scanner = ProximityScanner(context, mac)
 
         if (!scanner.hasBlePermission()) {
             log("缺少蓝牙权限")
             _status.value = _status.value.copy(lastError = "缺少蓝牙权限")
+            isRunning = false
             return
         }
 
         if (!scanner.isBluetoothReady()) {
             log("蓝牙未开启")
             _status.value = _status.value.copy(lastError = "蓝牙未开启")
+            isRunning = false
             return
         }
 
@@ -85,6 +93,7 @@ class ProximityService(private val context: Context) {
         if (targetDevice == null) {
             log("无效的 MAC 地址: $mac")
             _status.value = _status.value.copy(lastError = "无效的 MAC 地址")
+            isRunning = false
             return
         }
 
@@ -93,13 +102,10 @@ class ProximityService(private val context: Context) {
         _status.value = _status.value.copy(connectionState = ConnectionState.SCANNING)
 
         scanJob = scope.launch {
-            var lastScanTime = 0L
             try {
-                scanner.startScanning()
-                    .conflate()
-                    .collect { state ->
-                    lastScanTime = System.currentTimeMillis()
-                    lastDeviceSeen = lastScanTime
+                scanner.startScanning().collect { state ->
+                    lastScanResult = System.currentTimeMillis()
+                    lastDeviceSeen = lastScanResult
                     _status.value = _status.value.copy(
                         rssi = state.rssi,
                         label = state.label,
@@ -128,6 +134,43 @@ class ProximityService(private val context: Context) {
                     _status.value = _status.value.copy(connectionState = ConnectionState.SCANNING)
                 }
             }
+        }
+
+        probeTimer = scope.launch {
+            delay(8000)
+            while (isActive) {
+                if (!connector.connected && System.currentTimeMillis() - lastScanResult > 7000) {
+                    probeDevice(masterKey, masterRandom)
+                }
+                delay(8000)
+            }
+        }
+    }
+
+    private suspend fun probeDevice(masterKey: String, masterRandom: String) {
+        val device = targetDevice ?: return
+        val mk = cachedMasterKey ?: masterKey
+        val mr = cachedMasterRandom ?: masterRandom
+        try {
+            log("扫描无结果, 尝试直接探测连接...")
+            val connected = connector.ensureConnected(device)
+            if (connected) {
+                lastDeviceSeen = System.currentTimeMillis()
+                lastScanResult = lastDeviceSeen
+                _status.value = _status.value.copy(
+                    connectionState = ConnectionState.CONNECTED,
+                    rssi = -50,
+                    label = "已连接"
+                )
+                log("直接连接成功, 已建立持久连接")
+                val state = ProximityScanner.ProximityState(rssi = -50, label = "已连接", isNear = true, isFar = false)
+                handleProximity(state, mk, mr)
+            } else {
+                log("直接探测连接失败, 设备不在范围内")
+                _status.value = _status.value.copy(rssi = -100, label = "搜索中...")
+            }
+        } catch (e: Exception) {
+            log("直接探测异常: ${e.message}")
         }
     }
 
@@ -191,12 +234,13 @@ class ProximityService(private val context: Context) {
             val connected = connector.ensureConnected(device)
             if (!connected) throw RuntimeException("BLE连接失败")
             _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTED)
-            delay(1000)
+            delay(1500)
             if (connector.sendUnlock(masterKey, masterRandom)) {
                 _status.value = _status.value.copy(doorState = DoorState.UNLOCKED, lastError = null)
                 retryCount = 0
                 log("开锁成功")
                 lastDeviceSeen = System.currentTimeMillis()
+                lastScanResult = lastDeviceSeen
                 return true
             }
             log("开锁失败")
@@ -229,12 +273,13 @@ class ProximityService(private val context: Context) {
             val connected = connector.ensureConnected(device)
             if (!connected) throw RuntimeException("BLE连接失败")
             _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTED)
-            delay(1000)
+            delay(1500)
             if (connector.sendLock(masterKey, masterRandom)) {
                 _status.value = _status.value.copy(doorState = DoorState.LOCKED, lastError = null)
                 retryCount = 0
                 log("落锁成功")
                 lastDeviceSeen = System.currentTimeMillis()
+                lastScanResult = lastDeviceSeen
                 return true
             }
             log("落锁失败")
@@ -265,6 +310,8 @@ class ProximityService(private val context: Context) {
         scanJob = null
         disconnectTimer?.cancel()
         disconnectTimer = null
+        probeTimer?.cancel()
+        probeTimer = null
         connector.disconnectQuietly()
         try { connector.close() } catch (_: Exception) {}
         stopForegroundService()
