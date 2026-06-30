@@ -175,6 +175,12 @@ class BleConnector(context: Context) : BleManager(context) {
         }
     }
 
+    @Volatile
+    private var _lastIndication: ByteArray? = null
+
+    @Volatile
+    private var _indicationSource: String? = null
+
     private fun buildAuthPayload(cmd: Int, keyBytes: ByteArray, randomBytes: ByteArray): ByteArray {
         val payload = mutableListOf<Byte>()
 
