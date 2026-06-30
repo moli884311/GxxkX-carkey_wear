@@ -1,7 +1,9 @@
 package com.wuling.keyless.ble
 
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
+import android.content.Context
 import com.wuling.keyless.Constants
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -9,12 +11,13 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import no.nordicsemi.android.ble.BleManager
 import no.nordicsemi.android.ble.data.Data
-import no.nordicsemi.android.ble.data.DataReceived
 import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-class BleConnector : BleManager() {
+class BleConnector(context: Context) : BleManager(context) {
+
+    private var cachedGatt: BluetoothGatt? = null
 
     suspend fun connectAndWait(device: BluetoothDevice, timeoutMs: Long = 10_000): Boolean =
         suspendCancellableCoroutine { cont ->
@@ -58,8 +61,8 @@ class BleConnector : BleManager() {
             close()
             return@callbackFlow
         }
-        setNotificationCallback(char).with { _, data: DataReceived ->
-            trySend(data.value ?: ByteArray(0))
+        setNotificationCallback(char).with { _, data: Data ->
+            trySend(data.getValue() ?: ByteArray(0))
         }
         awaitClose {
             try { removeNotificationCallback(char) } catch (_: Exception) {}
@@ -119,7 +122,6 @@ class BleConnector : BleManager() {
     private suspend fun writeAndWait(char: BluetoothGattCharacteristic, data: ByteArray): ByteArray? {
         return suspendCancellableCoroutine { cont ->
             writeCharacteristic(char, data).split()
-                .write { _, _ -> }
                 .done {
                     if (cont.isActive) cont.resume(ByteArray(0))
                 }
@@ -139,7 +141,7 @@ class BleConnector : BleManager() {
     }
 
     private fun findCharacteristic(uuidStr: String): BluetoothGattCharacteristic? {
-        val services = bluetoothGatt?.services ?: return null
+        val services = cachedGatt?.services ?: return null
         val targetUuid = UUID.fromString(uuidStr)
         for (s in services) {
             if (s.uuid.toString().uppercase() == Constants.BLE_SERVICE_UUID.uppercase()) {
@@ -156,8 +158,12 @@ class BleConnector : BleManager() {
         }
     }
 
-    override fun getGattCallback(): BleManagerGattCallback = object : BleManagerGattCallback() {
-        override fun isRequiredServiceSupported(gatt: android.bluetooth.BluetoothGatt): Boolean = true
-        override fun onServicesInvalidated() {}
+    override fun isRequiredServiceSupported(gatt: BluetoothGatt): Boolean {
+        cachedGatt = gatt
+        return true
+    }
+
+    override fun onServicesInvalidated() {
+        cachedGatt = null
     }
 }

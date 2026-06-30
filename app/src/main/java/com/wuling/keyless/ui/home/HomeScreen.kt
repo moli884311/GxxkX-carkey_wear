@@ -30,6 +30,7 @@ import com.wuling.keyless.service.DoorState
 import com.wuling.keyless.ui.theme.*
 import com.wuling.keyless.viewmodel.HomeViewModel
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     onSettings: () -> Unit,

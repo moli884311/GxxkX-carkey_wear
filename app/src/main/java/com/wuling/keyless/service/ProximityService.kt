@@ -31,7 +31,7 @@ class ProximityService(private val context: Context) {
     )
 
     private val storage = KeyStorage(context)
-    private val connector = BleConnector()
+    private val connector = BleConnector(context)
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val _status = MutableStateFlow(Status())
@@ -146,7 +146,7 @@ class ProximityService(private val context: Context) {
         _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTING)
         log("泊车中...")
         return try {
-            connector.connectAndWait(device, Constants.CONNECTION_TIMEOUT_SEC * 1000)
+            connector.connectAndWait(device, Constants.CONNECTION_TIMEOUT_SEC * 1000L)
             _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTED)
             delay(500)
             val success = connector.sendUnlock(mk, mr)
@@ -169,7 +169,7 @@ class ProximityService(private val context: Context) {
         val device = targetDevice ?: return false
         _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTING)
         try {
-            connector.connectAndWait(device, Constants.CONNECTION_TIMEOUT_SEC * 1000)
+            connector.connectAndWait(device, Constants.CONNECTION_TIMEOUT_SEC * 1000L)
             _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTED)
             delay(1000)
             if (connector.sendUnlock(masterKey, masterRandom)) {
@@ -205,7 +205,7 @@ class ProximityService(private val context: Context) {
         val device = targetDevice ?: return false
         _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTING)
         try {
-            connector.connectAndWait(device, Constants.CONNECTION_TIMEOUT_SEC * 1000)
+            connector.connectAndWait(device, Constants.CONNECTION_TIMEOUT_SEC * 1000L)
             _status.value = _status.value.copy(connectionState = ConnectionState.CONNECTED)
             delay(1000)
             if (connector.sendLock(masterKey, masterRandom)) {
@@ -256,7 +256,7 @@ class ProximityService(private val context: Context) {
                 context.startService(intent)
             }
         } catch (e: Exception) {
-            log("启动前台服务失败: ${e.message}")
+            android.util.Log.e("ProximityService", "启动前台服务失败: ${e.message}")
         }
     }
 

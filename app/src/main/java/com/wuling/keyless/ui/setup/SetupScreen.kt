@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wuling.keyless.ui.theme.Primary
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SetupScreen(onSgmw: () -> Unit, onBle: () -> Unit) {
     Scaffold(

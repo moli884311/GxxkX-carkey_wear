@@ -21,6 +21,7 @@ import com.wuling.keyless.storage.KeyStorage
 import com.wuling.keyless.ui.theme.*
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(onReset: () -> Unit) {
     val context = LocalContext.current
@@ -45,8 +46,8 @@ fun SettingsScreen(onReset: () -> Unit) {
 
     LaunchedEffect(Unit) {
         val stored = storage.getRssiThresholds()
-        unlockRssi = stored?.first ?: "${Constants.DEFAULT_UNLOCK_RSSI}"
-        lockRssi = stored?.second ?: "${Constants.DEFAULT_LOCK_RSSI}"
+        unlockRssi = stored?.first?.toString() ?: "${Constants.DEFAULT_UNLOCK_RSSI}"
+        lockRssi = stored?.second?.toString() ?: "${Constants.DEFAULT_LOCK_RSSI}"
     }
 
     if (showResetDialog) {
