@@ -116,7 +116,7 @@ class ProximityService(private val context: Context) {
         disconnectTimer = scope.launch {
             while (isActive) {
                 delay(5000)
-                if (connector.isConnected && lastDeviceSeen > 0 &&
+                if (connector.connected && lastDeviceSeen > 0 &&
                     System.currentTimeMillis() - lastDeviceSeen > 30_000
                 ) {
                     log("30秒未检测到设备，断开BLE连接")
@@ -200,7 +200,7 @@ class ProximityService(private val context: Context) {
             return false
         } catch (e: Exception) {
             retryCount++
-            connector.isConnected = false
+            connector.connected = false
             val msg = "连接失败: ${e.message}"
             log(msg)
             if (retryCount >= Constants.MAX_RETRY_COUNT) {
@@ -238,7 +238,7 @@ class ProximityService(private val context: Context) {
             return false
         } catch (e: Exception) {
             retryCount++
-            connector.isConnected = false
+            connector.connected = false
             val msg = "连接失败: ${e.message}"
             log(msg)
             if (retryCount >= Constants.MAX_RETRY_COUNT) {

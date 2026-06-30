@@ -21,7 +21,7 @@ class BleConnector(context: Context) : BleManager(context) {
     private var cachedGatt: BluetoothGatt? = null
 
     @Volatile
-    var isConnected: Boolean = false
+    var connected: Boolean = false
         internal set
 
     suspend fun connectAndWait(device: BluetoothDevice, timeoutMs: Long = 10_000): Boolean =
@@ -30,7 +30,7 @@ class BleConnector(context: Context) : BleManager(context) {
             connect(device)
                 .timeout(timeoutMs)
                 .done {
-                    if (!resolved) { resolved = true; isConnected = true; cont.resume(true) }
+                    if (!resolved) { resolved = true; connected = true; cont.resume(true) }
                 }
                 .fail { _, status ->
                     if (!resolved) { resolved = true; cont.resumeWithException(RuntimeException("BLE连接失败: $status")) }
@@ -42,7 +42,7 @@ class BleConnector(context: Context) : BleManager(context) {
         }
 
     suspend fun ensureConnected(device: BluetoothDevice): Boolean {
-        if (isConnected) return true
+        if (connected) return true
         return try {
             connectAndWait(device)
         } catch (_: Exception) {
@@ -53,7 +53,7 @@ class BleConnector(context: Context) : BleManager(context) {
     fun disconnectQuietly() {
         try {
             disconnect().enqueue()
-            isConnected = false
+            connected = false
         } catch (_: Exception) {}
     }
 
@@ -196,6 +196,6 @@ class BleConnector(context: Context) : BleManager(context) {
 
     override fun onServicesInvalidated() {
         cachedGatt = null
-        isConnected = false
+        connected = false
     }
 }
