@@ -153,7 +153,6 @@ fun ProfileScreen(onReset: () -> Unit) {
                             }
                         }
                     )
-                    )
                     HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                     ProfileActionItem(
                         icon = Icons.Default.Info,
