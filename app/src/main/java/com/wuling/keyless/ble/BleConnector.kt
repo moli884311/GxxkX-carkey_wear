@@ -14,16 +14,9 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import no.nordicsemi.android.ble.BleManager
 import no.nordicsemi.android.ble.data.Data
-import no.nordicsemi.android.ble.request.MtuRequest
 import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-
-suspend fun MtuRequest.suspendWait(): Int = suspendCancellableCoroutine { cont ->
-    done { mtu -> if (cont.isActive) cont.resume(mtu) }
-    fail { _, _ -> if (cont.isActive) cont.resume(-1) }
-    enqueue()
-}
 
 class BleConnector(context: Context) : BleManager(context) {
 
@@ -112,9 +105,13 @@ class BleConnector(context: Context) : BleManager(context) {
             val randomBytes = hexToBytes(masterRandomHex)
             val authPayload = buildAuthPayload(cmd, keyBytes, randomBytes)
 
-            val mtu = requestMtu(512)
-                .suspendWait()
-            LogRepository.append("BLE", "MTU协商结果: $mtu")
+            val mtu = suspendCancellableCoroutine<Int> { cont ->
+                requestMtu(512)
+                    .done { m -> if (cont.isActive) cont.resume(m) }
+                    .fail { _, _ -> if (cont.isActive) cont.resume(-1) }
+                    .enqueue()
+            }
+            LogRepository.append("BLE", "MTU协商: $mtu")
 
             setIndicationCallback(notifyChar).with { _, data ->
                 _lastNotification = data.getValue()
@@ -127,9 +124,9 @@ class BleConnector(context: Context) : BleManager(context) {
                     .enqueue()
             }
 
-            LogRepository.append("BLE", "准备写入 cmd=0x${cmd.toString(16)} len=${authPayload.size} mtu=${mtu}")
+            LogRepository.append("BLE", "写入 cmd=0x${cmd.toString(16)} len=${authPayload.size}")
             val writeResult = suspendCancellableCoroutine<Boolean> { cont ->
-                writeCharacteristic(writeChar, authPayload)
+                writeCharacteristic(writeChar, authPayload).split()
                     .done { if (cont.isActive) cont.resume(true) }
                     .fail { _, status ->
                         if (cont.isActive) cont.resume(false)
@@ -141,7 +138,7 @@ class BleConnector(context: Context) : BleManager(context) {
             if (!writeResult) {
                 return false
             }
-            LogRepository.append("BLE", "写入成功 cmd=0x${cmd.toString(16)} 等待应答...")
+            LogRepository.append("BLE", "写入成功, 等待应答...")
 
             val notifData = withTimeoutOrNull(3000L) {
                 while (_lastNotification == null) {
@@ -154,7 +151,7 @@ class BleConnector(context: Context) : BleManager(context) {
 
             if (notifData != null && notifData.isNotEmpty()) {
                 val valid = validateResponse(notifData)
-                LogRepository.append("BLE", "车端应答 有效=$valid len=${notifData.size} hex=${notifData.joinToString("") { "%02x".format(it) }}")
+                LogRepository.append("BLE", "应答 valid=$valid len=${notifData.size} hex=${notifData.joinToString("") { "%02x".format(it) }}")
                 return valid
             }
             LogRepository.append("BLE", "写入成功(无应答) cmd=0x${cmd.toString(16)}")
