@@ -56,7 +56,7 @@ class ProximityService(private val context: Context) {
     }
 
     suspend fun start() {
-        if (isRunning) return
+        if (isRunning) stop()
         isRunning = true
 
         val mac = storage.getMac() ?: return log("未配置 BLE MAC")

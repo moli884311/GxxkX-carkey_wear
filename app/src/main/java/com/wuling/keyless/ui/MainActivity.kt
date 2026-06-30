@@ -1,7 +1,11 @@
 package com.wuling.keyless.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -13,6 +17,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -29,8 +34,34 @@ import com.wuling.keyless.ui.theme.WulingTheme
 import kotlinx.coroutines.launch
 
 class MainActivity : androidx.activity.ComponentActivity() {
+
+    private val bluetoothPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+    } else {
+        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val allGranted = results.values.all { it }
+        if (!allGranted) {
+            Toast.makeText(this, "需要蓝牙权限才能正常工作", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun requestBluetoothPermissions() {
+        val needRequest = bluetoothPermissions.any {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (needRequest) {
+            permissionLauncher.launch(bluetoothPermissions)
+        }
+    }
+
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
+        requestBluetoothPermissions()
         setContent {
             WulingTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {

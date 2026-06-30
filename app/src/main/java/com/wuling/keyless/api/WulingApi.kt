@@ -54,7 +54,8 @@ class WulingApi(
                 val json = JSONObject(body)
                 val code = json.optString("code", "")
                 if (code != "200") {
-                    return@withContext LoginResult(false, error = json.optString("msg", "登录失败"))
+                    val msg = json.optString("msg", "").ifEmpty { "未知错误" }
+                    return@withContext LoginResult(false, error = "[$code] $msg")
                 }
 
                 val data = json.optJSONObject("data") ?: return@withContext LoginResult(false, error = "数据为空")

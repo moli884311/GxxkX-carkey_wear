@@ -49,7 +49,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 _logs.value = updated
             }
         }
-        viewModelScope.launch { service.start() }
     }
 
     fun setSmartKeyEnabled(v: Boolean) {
@@ -93,6 +92,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _toastMessage.value = withContext(Dispatchers.IO) { service.manualPark() }
         }
+    }
+
+    fun restartService() {
+        viewModelScope.launch { service.start() }
     }
 
     fun clearToast() { _toastMessage.value = null }

@@ -49,6 +49,10 @@ fun HomeScreen(
         }
     }
 
+    LaunchedEffect(Unit) {
+        viewModel.restartService()
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
