@@ -8,7 +8,7 @@ class NativeLib {
         }
     }
 
-    external fun initAuth(key: ByteArray, random: ByteArray, deviceId: String)
+    external fun initAuth(deviceId: String, key: ByteArray, random: ByteArray)
     external fun getNextCommand(): BleCommand?
     external fun feedNotification(data: ByteArray)
     external fun setControlIntent(intent: String)
