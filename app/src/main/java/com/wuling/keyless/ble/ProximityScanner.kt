@@ -15,6 +15,7 @@ import android.os.Build
 import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import com.wuling.keyless.Constants
+import com.wuling.keyless.service.LogRepository
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -77,7 +78,7 @@ class ProximityScanner(private val context: Context, private val targetMac: Stri
             }
 
             override fun onScanFailed(errorCode: Int) {
-                android.util.Log.e("ProximityScanner", "BLE扫描失败 errorCode=$errorCode")
+                LogRepository.append("Scan", "BLE扫描失败 errorCode=$errorCode")
             }
 
             override fun onBatchScanResults(results: MutableList<ScanResult>?) {
@@ -87,11 +88,13 @@ class ProximityScanner(private val context: Context, private val targetMac: Stri
 
         android.util.Log.d("ProximityScanner", "开始扫描, targetMac=$targetMac, normalizedMac=$normalizedTargetMac, filters=null")
 
+        LogRepository.append("Scan", "开始扫描 mac=$normalizedTargetMac")
+
         scanner.startScan(filters, settings, scanCallback)
 
         awaitClose {
             try { scanner.stopScan(scanCallback) } catch (_: Exception) {}
-            android.util.Log.d("ProximityScanner", "扫描已停止")
+            LogRepository.append("Scan", "扫描已停止")
         }
     }
 

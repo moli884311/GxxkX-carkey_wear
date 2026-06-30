@@ -4,7 +4,9 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
 import android.content.Context
+import android.util.Log
 import com.wuling.keyless.Constants
+import com.wuling.keyless.service.LogRepository
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -30,10 +32,12 @@ class BleConnector(context: Context) : BleManager(context) {
             connect(device)
                 .timeout(timeoutMs)
                 .done {
-                    if (!resolved) { resolved = true; connected = true; cont.resume(true) }
+                    if (!resolved) { resolved = true; connected = true; LogRepository.append("BLE", "连接成功 ${device.address}") }
+                    cont.resume(true)
                 }
                 .fail { _, status ->
-                    if (!resolved) { resolved = true; cont.resumeWithException(RuntimeException("BLE连接失败: $status")) }
+                    if (!resolved) { resolved = true; LogRepository.append("BLE", "连接失败: $status") }
+                    cont.resumeWithException(RuntimeException("BLE连接失败: $status"))
                 }
                 .enqueue()
             cont.invokeOnCancellation {
@@ -54,6 +58,7 @@ class BleConnector(context: Context) : BleManager(context) {
         try {
             disconnect().enqueue()
             connected = false
+            LogRepository.append("BLE", "已断开连接")
         } catch (_: Exception) {}
     }
 
@@ -113,7 +118,10 @@ class BleConnector(context: Context) : BleManager(context) {
                     .enqueue()
             }
 
-            if (!writeResult) return false
+            if (!writeResult) {
+                LogRepository.append("BLE", "写入失败 cmd=0x${cmd.toString(16)}")
+                return false
+            }
 
             val notifData = withTimeoutOrNull(3000L) {
                 while (_lastNotification == null) {
@@ -125,8 +133,11 @@ class BleConnector(context: Context) : BleManager(context) {
             _lastNotification = null
 
             if (notifData != null && notifData.isNotEmpty()) {
-                return validateResponse(notifData)
+                val valid = validateResponse(notifData)
+                LogRepository.append("BLE", "通知响应 有效=$valid len=${notifData.size}")
+                return valid
             }
+            LogRepository.append("BLE", "写入成功(无通知校验) cmd=0x${cmd.toString(16)}")
             return true
         } catch (_: Exception) {
             return false

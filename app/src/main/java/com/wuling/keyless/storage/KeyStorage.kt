@@ -111,5 +111,6 @@ class KeyStorage(private val context: Context) {
 
     suspend fun clearAll() {
         context.dataStore.edit { it.clear() }
+        com.wuling.keyless.service.LogRepository.clear()
     }
 }

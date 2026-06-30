@@ -49,6 +49,7 @@ class ProximityService(private val context: Context) {
     private var retryCount = 0L
 
     private suspend fun log(msg: String) {
+        LogRepository.append("ProxSvc", msg)
         _logs.emit("[${System.currentTimeMillis().toString().takeLast(8)}] $msg")
     }
 

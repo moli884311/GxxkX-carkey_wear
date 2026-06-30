@@ -17,6 +17,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.wuling.keyless.service.LogRepository
 import com.wuling.keyless.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -134,12 +135,24 @@ fun ProfileScreen(onReset: () -> Unit) {
                         title = "分享运行日志",
                         subtitle = "导出日志便于问题排查",
                         onClick = {
-                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_TEXT, "五菱无感控车运行日志")
+                            try {
+                                val logText = LogRepository.read()
+                                val filePath = LogRepository.getFilePath()
+                                if (logText.isBlank()) {
+                                    Toast.makeText(context, "暂无日志", Toast.LENGTH_SHORT).show()
+                                    return@ProfileActionItem
+                                }
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_SUBJECT, "五菱无感控车运行日志")
+                                    putExtra(Intent.EXTRA_TEXT, logText.takeLast(50000))
+                                }
+                                context.startActivity(Intent.createChooser(shareIntent, "分享日志 (${logText.lines().size}行)"))
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "导出失败: ${e.message}", Toast.LENGTH_SHORT).show()
                             }
-                            context.startActivity(Intent.createChooser(shareIntent, "分享日志"))
                         }
+                    )
                     )
                     HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                     ProfileActionItem(
