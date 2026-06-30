@@ -93,7 +93,9 @@ class ProximityService(private val context: Context) {
         scanJob = scope.launch {
             var lastScanTime = 0L
             try {
-                scanner.startScanning().collect { state ->
+                scanner.startScanning()
+                    .conflate()
+                    .collect { state ->
                     lastScanTime = System.currentTimeMillis()
                     lastDeviceSeen = lastScanTime
                     _status.value = _status.value.copy(
