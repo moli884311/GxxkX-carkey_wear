@@ -116,7 +116,7 @@ class BleConnector(context: Context) : BleManager(context) {
                     .enqueue()
             }
 
-            LogRepository.append("BLE", "写入 cmd=0x${cmd.toString(16)} len=${authPayload.size}")
+            LogRepository.append("BLE", "写入 cmd=0x${cmd.toString(16)} len=${authPayload.size} hex=${authPayload.joinToString("") { "%02x".format(it) }}")
             val writeResult = suspendCancellableCoroutine<Boolean> { cont ->
                 writeCharacteristic(writeChar, authPayload).split()
                     .done { if (cont.isActive) cont.resume(true) }
@@ -160,6 +160,7 @@ class BleConnector(context: Context) : BleManager(context) {
     private fun buildAuthPayload(cmd: Int, keyBytes: ByteArray, randomBytes: ByteArray): ByteArray {
         val payload = mutableListOf<Byte>()
 
+        payload.addAll(keyIdBytes())
         payload.add(cmd.toByte())
         payload.addAll(randomBytes.toList())
         payload.addAll(keyBytes.toList())
@@ -167,6 +168,16 @@ class BleConnector(context: Context) : BleManager(context) {
         appendXorChecksum(payload)
 
         return payload.toByteArray()
+    }
+
+    private fun keyIdBytes(): ByteArray {
+        val id = 824564
+        return byteArrayOf(
+            (id and 0xFF).toByte(),
+            ((id shr 8) and 0xFF).toByte(),
+            ((id shr 16) and 0xFF).toByte(),
+            ((id shr 24) and 0xFF).toByte()
+        )
     }
 
     private fun appendXorChecksum(bytes: MutableList<Byte>) {
