@@ -41,9 +41,10 @@ class ProximityScanner(private val context: Context, private val targetMac: Stri
         }
 
         val normalizedMac = targetMac.uppercase().replace(":", "").replace("-", "")
+        val formattedMac = if (normalizedMac.length == 12) normalizedMac.chunked(2).joinToString(":") else normalizedMac
 
         val filters = if (normalizedMac.length == 12) {
-            listOf(ScanFilter.Builder().setDeviceAddress(normalizedMac).build())
+            listOf(ScanFilter.Builder().setDeviceAddress(formattedMac).build())
         } else {
             listOf(ScanFilter.Builder()
                 .setServiceUuid(ParcelUuid.fromString(Constants.BLE_SERVICE_UUID))
@@ -93,6 +94,7 @@ class ProximityScanner(private val context: Context, private val targetMac: Stri
     fun getDevice(): BluetoothDevice? {
         val normalizedMac = targetMac.uppercase().replace(":", "").replace("-", "")
         if (normalizedMac.length != 12) return null
-        return bluetoothAdapter?.getRemoteDevice(normalizedMac)
+        val formattedMac = normalizedMac.chunked(2).joinToString(":")
+        return bluetoothAdapter?.getRemoteDevice(formattedMac)
     }
 }
