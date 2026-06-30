@@ -1,5 +1,6 @@
 -keepattributes Signature
 -keepattributes *Annotation*
 -keep class com.wuling.keyless.** { *; }
+-keep class pet.morning.linkey.** { *; }
 -dontwarn okhttp3.**
 -dontwarn okio.**

@@ -4,7 +4,6 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
 import android.content.Context
-import android.util.Log
 import com.wuling.keyless.Constants
 import com.wuling.keyless.service.LogRepository
 import kotlinx.coroutines.channels.awaitClose
@@ -14,13 +13,17 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import no.nordicsemi.android.ble.BleManager
 import no.nordicsemi.android.ble.data.Data
+import pet.morning.linkey.BleCommand
+import pet.morning.linkey.NativeLib
 import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 class BleConnector(context: Context) : BleManager(context) {
 
+    private val nativeLib = NativeLib()
     private var cachedGatt: BluetoothGatt? = null
+    private var sessionReady = false
 
     @Volatile
     var connected: Boolean = false
@@ -56,6 +59,8 @@ class BleConnector(context: Context) : BleManager(context) {
 
     fun disconnectQuietly() {
         try {
+            try { nativeLib.destroySession() } catch (_: Exception) {}
+            sessionReady = false
             disconnect().enqueue()
             connected = false
             LogRepository.append("BLE", "已断开连接")
@@ -91,54 +96,66 @@ class BleConnector(context: Context) : BleManager(context) {
         }
     }
 
-    suspend fun sendLock(bleKeyHex: String, masterKeyHex: String, masterRandomHex: String): Boolean =
-        sendAuthenticatedCommand(Constants.CMD_LOCK, bleKeyHex, masterKeyHex, masterRandomHex)
-
-    suspend fun sendUnlock(bleKeyHex: String, masterKeyHex: String, masterRandomHex: String): Boolean =
-        sendAuthenticatedCommand(Constants.CMD_UNLOCK, bleKeyHex, masterKeyHex, masterRandomHex)
-
-    private suspend fun sendAuthenticatedCommand(cmd: Int, bleKeyHex: String, masterKeyHex: String, masterRandomHex: String): Boolean {
-        val writeChar = getWriteCharacteristic() ?: return false
+    suspend fun initSession(masterKeyHex: String, masterRandomHex: String) {
         try {
             val keyBytes = hexToBytes(masterKeyHex)
             val randomBytes = hexToBytes(masterRandomHex)
-            LogRepository.append("BLE", "rawKeyLen=${masterKeyHex.length} rawRandLen=${masterRandomHex.length}")
-            val authPayload = buildAuthPayload(cmd, keyBytes, randomBytes)
-
-            setupIndicationsAndWait()
-
-            LogRepository.append("BLE", "写入 cmd=0x${cmd.toString(16)} len=${authPayload.size} hex=${authPayload.joinToString("") { "%02x".format(it) }}")
-            val ok = writeAndWait(writeChar, authPayload)
-            if (!ok) return false
-
-            val resp = waitForIndication(3000L)
-            if (resp != null && resp.isNotEmpty()) {
-                val valid = validateResponse(resp)
-                LogRepository.append("BLE", "应答 src=$_indicationSource valid=$valid len=${resp.size} hex=${resp.joinToString("") { "%02x".format(it) }}")
-                return valid
-            }
-            LogRepository.append("BLE", "写入成功(无应答) cmd=0x${cmd.toString(16)}")
-            return true
+            nativeLib.initAuth(keyBytes, randomBytes, "")
+            sessionReady = true
+            LogRepository.append("BLE", "Native auth session initialized rawKeyLen=${masterKeyHex.length} rawRandLen=${masterRandomHex.length}")
         } catch (e: Exception) {
-            LogRepository.append("BLE", "异常 cmd=0x${cmd.toString(16)}: ${e.message}")
-            return false
+            sessionReady = false
+            LogRepository.append("BLE", "initAuth failed: ${e.message}")
+            throw e
         }
     }
 
-    private fun setupIndications(notifyChar: BluetoothGattCharacteristic, writeChar: BluetoothGattCharacteristic) {
-        _lastIndication = null
-        _indicationSource = null
+    suspend fun sendLock(bleKeyHex: String, masterKeyHex: String, masterRandomHex: String): Boolean {
+        if (!sessionReady) initSession(masterKeyHex, masterRandomHex)
+        return performNativeControl("START_PARK_2")
+    }
 
-        setIndicationCallback(notifyChar).with { _, data ->
-            _lastIndication = data.getValue()
-            _indicationSource = "NOTIFY"
+    suspend fun sendUnlock(bleKeyHex: String, masterKeyHex: String, masterRandomHex: String): Boolean {
+        if (!sessionReady) initSession(masterKeyHex, masterRandomHex)
+        return performNativeControl("START_OUT_2")
+    }
+
+    private suspend fun performNativeControl(intent: String): Boolean {
+        val writeChar = getWriteCharacteristic() ?: return false
+        try {
+            nativeLib.setControlIntent(intent)
+            LogRepository.append("BLE", "Control intent: $intent")
+
+            if (!setupIndicationsAndWait()) return false
+
+            var round = 0
+            while (round < 10) {
+                round++
+                val cmd: BleCommand = nativeLib.getNextCommand() ?: break
+                val data = cmd.data ?: break
+
+                LogRepository.append("BLE", "Phase write round=$round len=${data.size} hex=${data.joinToString("") { "%02x".format(it) }}")
+                val ok = writeAndWait(writeChar, data)
+                if (!ok) {
+                    LogRepository.append("BLE", "Write failed at round $round")
+                    return false
+                }
+
+                val resp = waitForIndication(3000L)
+                if (resp != null && resp.isNotEmpty()) {
+                    LogRepository.append("BLE", "Response round=$round src=$_indicationSource len=${resp.size} hex=${resp.joinToString("") { "%02x".format(it) }}")
+                    nativeLib.feedNotification(resp)
+                } else {
+                    LogRepository.append("BLE", "No response at round $round")
+                }
+            }
+
+            LogRepository.append("BLE", "Control $intent completed ($round rounds)")
+            return round > 0
+        } catch (e: Exception) {
+            LogRepository.append("BLE", "Native control $intent failed: ${e.message}")
+            return false
         }
-        setIndicationCallback(writeChar).with { _, data ->
-            _lastIndication = data.getValue()
-            _indicationSource = "WRITE"
-        }
-        enableIndications(notifyChar).enqueue()
-        enableIndications(writeChar).enqueue()
     }
 
     suspend fun setupIndicationsAndWait(): Boolean {
@@ -202,44 +219,6 @@ class BleConnector(context: Context) : BleManager(context) {
 
     @Volatile
     private var _indicationSource: String? = null
-
-    private fun buildAuthPayload(cmd: Int, keyBytes: ByteArray, randomBytes: ByteArray): ByteArray {
-        val payload = mutableListOf<Byte>()
-
-        payload.addAll(keyIdBytes().toList())
-        payload.add(cmd.toByte())
-        payload.addAll(randomBytes.toList())
-        payload.addAll(keyBytes.toList())
-
-        appendXorChecksum(payload)
-
-        return payload.toByteArray()
-    }
-
-    private fun keyIdBytes(): ByteArray {
-        val id = 824564
-        return byteArrayOf(
-            (id and 0xFF).toByte(),
-            ((id shr 8) and 0xFF).toByte(),
-            ((id shr 16) and 0xFF).toByte(),
-            ((id shr 24) and 0xFF).toByte()
-        )
-    }
-
-    private fun appendXorChecksum(bytes: MutableList<Byte>) {
-        var xor: Byte = 0
-        for (b in bytes) xor = (xor.toInt() xor b.toInt()).toByte()
-        bytes.add(xor)
-    }
-
-    private fun validateResponse(data: ByteArray): Boolean {
-        if (data.size < 2) return false
-        val payload = data.sliceArray(0 until data.size - 1)
-        val checksum = data.last()
-        var xor: Byte = 0
-        for (b in payload) xor = (xor.toInt() xor b.toInt()).toByte()
-        return xor == checksum
-    }
 
     fun getWriteCharacteristic(): BluetoothGattCharacteristic? {
         return findCharacteristic(Constants.BLE_WRITE_CHAR_UUID)
