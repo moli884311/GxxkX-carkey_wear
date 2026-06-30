@@ -84,50 +84,41 @@ class BleConnector(context: Context) : BleManager(context) {
             val randomBytes = hexToBytes(masterRandomHex)
             val authPayload = buildAuthPayload(cmd, keyBytes, randomBytes)
 
-            val response = withTimeoutOrNull(10_000L) {
-                suspendCancellableCoroutine<ByteArray?> { cont ->
-                    var resolved = false
-
-                    setNotificationCallback(notifyChar).with { _, data ->
-                        if (!resolved && cont.isActive) {
-                            resolved = true
-                            cont.resume(data.getValue())
-                        }
-                    }
-
-                    cont.invokeOnCancellation {
-                        if (!resolved) {
-                            try { removeNotificationCallback(notifyChar) } catch (_: Exception) {}
-                        }
-                    }
-
-                    enableNotifications(notifyChar)
-                        .done {
-                            writeCharacteristic(writeChar, authPayload).split()
-                                .fail { _, _ ->
-                                    if (!resolved && cont.isActive) {
-                                        resolved = true
-                                        cont.resume(null)
-                                    }
-                                }
-                                .enqueue()
-                        }
-                        .fail { _, _ ->
-                            if (!resolved && cont.isActive) {
-                                resolved = true
-                                cont.resume(null)
-                            }
-                        }
-                        .enqueue()
-                }
+            setNotificationCallback(notifyChar).with { _, data ->
+                _lastNotification = data.getValue()
             }
 
-            if (response == null) return false
-            return validateResponse(response)
+            enableNotifications(notifyChar).enqueue()
+
+            val writeResult = suspendCancellableCoroutine<Boolean> { cont ->
+                writeCharacteristic(writeChar, authPayload).split()
+                    .done { if (cont.isActive) cont.resume(true) }
+                    .fail { _, _ -> if (cont.isActive) cont.resume(false) }
+                    .enqueue()
+            }
+
+            if (!writeResult) return false
+
+            val notifData = withTimeoutOrNull(3000L) {
+                while (_lastNotification == null) {
+                    kotlinx.coroutines.delay(100)
+                }
+                _lastNotification
+            }
+
+            _lastNotification = null
+
+            if (notifData != null && notifData.isNotEmpty()) {
+                return validateResponse(notifData)
+            }
+            return true
         } catch (_: Exception) {
             return false
         }
     }
+
+    @Volatile
+    private var _lastNotification: ByteArray? = null
 
     private fun buildAuthPayload(cmd: Int, keyBytes: ByteArray, randomBytes: ByteArray): ByteArray {
         val payload = mutableListOf<Byte>()
