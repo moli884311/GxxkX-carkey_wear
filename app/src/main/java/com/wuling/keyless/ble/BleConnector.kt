@@ -105,14 +105,6 @@ class BleConnector(context: Context) : BleManager(context) {
             val randomBytes = hexToBytes(masterRandomHex)
             val authPayload = buildAuthPayload(cmd, keyBytes, randomBytes)
 
-            val mtu = suspendCancellableCoroutine<Int> { cont ->
-                requestMtu(512)
-                    .done { m -> if (cont.isActive) cont.resume(m) }
-                    .fail { _, _ -> if (cont.isActive) cont.resume(-1) }
-                    .enqueue()
-            }
-            LogRepository.append("BLE", "MTU协商: $mtu")
-
             setIndicationCallback(notifyChar).with { _, data ->
                 _lastNotification = data.getValue()
             }
