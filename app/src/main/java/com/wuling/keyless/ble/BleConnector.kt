@@ -99,34 +99,21 @@ class BleConnector(context: Context) : BleManager(context) {
 
     private suspend fun sendAuthenticatedCommand(cmd: Int, bleKeyHex: String, masterKeyHex: String, masterRandomHex: String): Boolean {
         val writeChar = getWriteCharacteristic() ?: return false
-        val notifyChar = getNotifyCharacteristic() ?: return false
         try {
             val keyBytes = hexToBytes(masterKeyHex)
             val randomBytes = hexToBytes(masterRandomHex)
-
-            setupIndications(notifyChar, writeChar)
-
-            val kid = keyIdBytes()
-            LogRepository.append("BLE", "阶段1: 发送keyId hex=${kid.joinToString("") { "%02x".format(it) }}")
-            val phase1Ok = writeAndWait(writeChar, kid)
-            if (!phase1Ok) return false
-
-            val challenge = waitForIndication(3000L)
-            if (challenge != null) {
-                LogRepository.append("BLE", "收到challenge len=${challenge.size} hex=${challenge.joinToString("") { "%02x".format(it) }}")
-            } else {
-                LogRepository.append("BLE", "阶段1无应答, 继续发送命令...")
-            }
-
             val authPayload = buildAuthPayload(cmd, keyBytes, randomBytes)
-            LogRepository.append("BLE", "阶段2: 写入 cmd=0x${cmd.toString(16)} len=${authPayload.size} hex=${authPayload.joinToString("") { "%02x".format(it) }}")
-            val phase2Ok = writeAndWait(writeChar, authPayload)
-            if (!phase2Ok) return false
 
-            val response = waitForIndication(3000L)
-            if (response != null && response.isNotEmpty()) {
-                val valid = validateResponse(response)
-                LogRepository.append("BLE", "应答 src=$_indicationSource valid=$valid len=${response.size} hex=${response.joinToString("") { "%02x".format(it) }}")
+            setupIndicationsAndWait()
+
+            LogRepository.append("BLE", "写入 cmd=0x${cmd.toString(16)} len=${authPayload.size} hex=${authPayload.joinToString("") { "%02x".format(it) }}")
+            val ok = writeAndWait(writeChar, authPayload)
+            if (!ok) return false
+
+            val resp = waitForIndication(3000L)
+            if (resp != null && resp.isNotEmpty()) {
+                val valid = validateResponse(resp)
+                LogRepository.append("BLE", "应答 src=$_indicationSource valid=$valid len=${resp.size} hex=${resp.joinToString("") { "%02x".format(it) }}")
                 return valid
             }
             LogRepository.append("BLE", "写入成功(无应答) cmd=0x${cmd.toString(16)}")
@@ -151,6 +138,40 @@ class BleConnector(context: Context) : BleManager(context) {
         }
         enableIndications(notifyChar).enqueue()
         enableIndications(writeChar).enqueue()
+    }
+
+    suspend fun setupIndicationsAndWait(): Boolean {
+        val notifyChar = getNotifyCharacteristic() ?: return false
+        val writeChar = getWriteCharacteristic() ?: return false
+
+        _lastIndication = null
+        _indicationSource = null
+
+        setIndicationCallback(notifyChar).with { _, data ->
+            _lastIndication = data.getValue()
+            _indicationSource = "NOTIFY"
+        }
+        setIndicationCallback(writeChar).with { _, data ->
+            _lastIndication = data.getValue()
+            _indicationSource = "WRITE"
+        }
+
+        return suspendCancellableCoroutine { cont ->
+            enableIndications(notifyChar)
+                .done {
+                    enableIndications(writeChar)
+                        .done { if (cont.isActive) cont.resume(true) }
+                        .fail { _, _ -> if (cont.isActive) cont.resume(true) }
+                        .enqueue()
+                }
+                .fail { _, _ ->
+                    enableIndications(writeChar)
+                        .done { if (cont.isActive) cont.resume(true) }
+                        .fail { _, _ -> if (cont.isActive) cont.resume(true) }
+                        .enqueue()
+                }
+                .enqueue()
+        }
     }
 
     private suspend fun writeAndWait(writeChar: BluetoothGattCharacteristic, data: ByteArray): Boolean {
